@@ -1,0 +1,15 @@
+[package]
+name = "codegenerator"
+version = "0.0.0"
+edition = "2021"
+description = "Protocol buffers code generator - for making sure you don't need protoc"
+license = "Apache-2.0"
+authors = ["kvc0"]
+repository = "https://github.com/kvc0/tracing_otlp"
+publish = false
+
+[lib]
+bench = false
+
+[build-dependencies]
+tonic-build = { version = "0.9", features = [] }

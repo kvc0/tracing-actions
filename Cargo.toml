@@ -1,0 +1,6 @@
+[workspace]
+
+members = [
+    "tracing_actions",
+    "proto_generator"
+]

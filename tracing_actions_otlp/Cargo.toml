@@ -1,0 +1,26 @@
+[package]
+name = "tracing-actions-otlp"
+version = "0.1.0"
+edition = "2021"
+description = "Tracing-actions extension that sends action traces to an OTLP server."
+license = "Apache-2.0"
+authors = ["kvc0"]
+readme = "README.md"
+repository = "https://github.com/kvc0/tracing-actions"
+keywords = ["tracing", "service", "performance"]
+categories = ["web-programming", "development-tools::profiling"]
+
+[lib]
+bench = false
+
+[dependencies]
+tonic = { version = "0.9" }
+prost = { version = "0.11" }
+tracing = { version = "0.1" }
+log = { version = "0.4" }
+rand = { version = "0.8" }
+object-pool = { version = "0.5" }
+thread_local = { version = "1.1" }
+
+[dev-dependencies]
+criterion = { version = "0.4" }
