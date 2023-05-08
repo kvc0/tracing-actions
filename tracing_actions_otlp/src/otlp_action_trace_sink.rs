@@ -10,7 +10,7 @@ use tracing_actions::{ActionEvent, AttributeValue, SpanStatus, TraceKind, TraceS
 const VERSION: Option<&str> = option_env!("CARGO_PKG_VERSION");
 
 use crate::{
-    channel_connection::{default_trust_store, get_channel, ChannelType},
+    channel_connection::{default_trust_store, get_channel, ChannelType, insecure_trust_store},
     proto::opentelemetry::{
         collector::trace::v1::{
             trace_service_client::TraceServiceClient, ExportTraceServiceRequest,
@@ -41,11 +41,16 @@ impl OtlpActionTraceSink {
         otlp_endpoint: &str,
         interceptors: Option<Box<dyn RequestInterceptor>>,
         batch_size: usize,
+        insecure: bool,
     ) -> Result<Self, Box<dyn Error>> {
         Ok(Self {
             client: get_channel(
                 otlp_endpoint.parse()?,
-                default_trust_store,
+                if insecure {
+                    insecure_trust_store
+                } else {
+                    default_trust_store
+                },
                 TraceServiceClient::with_origin,
             ),
             interceptors: interceptors.into(),
@@ -86,7 +91,6 @@ async fn send_batch(
     mut client: TraceServiceClient<ChannelType>,
     interceptors: Arc<Option<Box<dyn RequestInterceptor>>>,
 ) {
-    log::trace!("sending batch: {batch:?}");
     let mut request = tonic::Request::new(ExportTraceServiceRequest {
         resource_spans: vec![ResourceSpans {
             resource: None,
@@ -103,6 +107,7 @@ async fn send_batch(
             schema_url: Default::default(),
         }],
     });
+    log::trace!("sending batch: {request:#?}");
     if let Some(interceptor) = interceptors.as_ref() {
         interceptor.intercept_request(&mut request);
     }

@@ -72,6 +72,10 @@ where
     construct_client(hyper::Client::builder().build(https_connector), endpoint)
 }
 
+pub fn insecure_trust_store() -> Option<RootCertStore> {
+    None
+}
+
 pub fn default_trust_store() -> Option<RootCertStore> {
     let mut store = tokio_rustls::rustls::RootCertStore::empty();
     store.add_server_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.0.iter().map(|trust_anchor| {
