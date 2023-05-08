@@ -1,4 +1,4 @@
-use std::{collections::HashMap, time::Instant};
+use std::{collections::HashMap, time::SystemTime};
 
 use tracing::{field::Visit, span::Attributes, Metadata};
 
@@ -6,7 +6,7 @@ pub trait Resettable {
     fn reset(&mut self);
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum TraceKind {
     Client,
     Server,
@@ -17,7 +17,7 @@ impl Default for TraceKind {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum SpanStatus {
     Unset,
     Ok,
@@ -64,7 +64,7 @@ pub struct ActionSpan {
     /// Value is UNIX Epoch time in nanoseconds since 00:00:00 UTC on 1 January 1970.
     ///
     /// This field is semantically required and it is expected that end_time >= start_time.
-    pub start: Instant,
+    pub start: SystemTime,
 
     /// end_time_unix_nano is the end time of the span. On the client side, this is the time
     /// kept by the local machine where the span execution ends. On the server side, this
@@ -72,7 +72,7 @@ pub struct ActionSpan {
     /// Value is UNIX Epoch time in nanoseconds since 00:00:00 UTC on 1 January 1970.
     ///
     /// This field is semantically required and it is expected that end_time >= start_time.
-    pub end: Instant,
+    pub end: SystemTime,
 
     /// attributes is a collection of key/value pairs.
     ///
@@ -98,8 +98,8 @@ impl Default for ActionSpan {
             parent_span_id: Default::default(),
             metadata: Default::default(),
             kind: Default::default(),
-            start: Instant::now(),
-            end: Instant::now(),
+            start: SystemTime::now(),
+            end: SystemTime::now(),
             attributes: Default::default(),
             events: Default::default(),
             status: Default::default(),
@@ -127,7 +127,7 @@ impl ActionSpan {
         self.trace_id = rand::random();
         self.span_id = rand::random();
 
-        self.start = Instant::now();
+        self.start = SystemTime::now();
 
         self.attach_attributes(attributes);
     }
@@ -142,13 +142,13 @@ impl ActionSpan {
         self.span_id = rand::random();
         self.parent_span_id = Some(*parent_span_id); // We can use the Copy trait here
 
-        self.start = Instant::now();
+        self.start = SystemTime::now();
 
         self.attach_attributes(attributes);
     }
 
     pub fn end(&mut self) {
-        self.end = Instant::now();
+        self.end = SystemTime::now();
     }
 
     fn attach_attributes(&mut self, attributes: &Attributes) {
@@ -162,6 +162,7 @@ impl ActionSpan {
 pub struct ActionEvent {
     pub metadata: &'static Metadata<'static>,
     pub attributes: HashMap<&'static str, AttributeValue>,
+    pub timestamp: SystemTime,
 }
 
 impl<'a> From<&'a tracing::Event<'a>> for ActionEvent {
@@ -169,6 +170,7 @@ impl<'a> From<&'a tracing::Event<'a>> for ActionEvent {
         let mut selff = Self {
             metadata: event.metadata(),
             attributes: HashMap::new(),
+            timestamp: SystemTime::now(),
         };
         event.record(&mut selff);
         selff

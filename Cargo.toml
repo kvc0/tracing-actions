@@ -1,6 +1,7 @@
 [workspace]
 
 members = [
+    "proto_generator",
     "tracing_actions",
-    "proto_generator"
+    "tracing_actions_otlp",
 ]

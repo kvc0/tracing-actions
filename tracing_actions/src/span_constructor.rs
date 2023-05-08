@@ -7,7 +7,7 @@ pub trait SpanConstructor {
     fn return_span(&self, span: ActionSpan);
 }
 
-pub struct AlwaysNewSpanConstructor {}
+pub struct AlwaysNewSpanConstructor;
 impl SpanConstructor for AlwaysNewSpanConstructor {
     fn new_span(&self) -> ActionSpan {
         ActionSpan::default()

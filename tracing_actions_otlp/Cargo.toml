@@ -2,7 +2,7 @@
 name = "tracing-actions-otlp"
 version = "0.1.0"
 edition = "2021"
-description = "Tracing-actions extension that sends action traces to an OTLP server."
+description = "tracing-actions extension that sends action traces to an opentelemetry server."
 license = "Apache-2.0"
 authors = ["kvc0"]
 readme = "README.md"
@@ -14,13 +14,15 @@ categories = ["web-programming", "development-tools::profiling"]
 bench = false
 
 [dependencies]
-tonic = { version = "0.9" }
+tokio = { version = "1.28" }
+hyper = { version = "0.14" }
+tower = { version = "0.4" }
+tonic = { version = "0.9", features = ["tls", "tls-roots"] }
+tokio-rustls = { version = "0.24", features = [ "dangerous_configuration" ] }
+hyper-rustls = { version = "0.24", features = [ "http2" ] }
+http-body = { version = "0.4" }
 prost = { version = "0.11" }
-tracing = { version = "0.1" }
-log = { version = "0.4" }
-rand = { version = "0.8" }
-object-pool = { version = "0.5" }
-thread_local = { version = "1.1" }
+tracing-actions = { version = "0.1", path = "../tracing_actions" }
+log = { version = "0" }
 
-[dev-dependencies]
-criterion = { version = "0.4" }
+webpki-roots = { version = "0.23" }

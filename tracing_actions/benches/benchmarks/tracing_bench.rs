@@ -2,14 +2,18 @@ use criterion::{black_box, criterion_group, Criterion};
 use tracing::{metadata::LevelFilter, Instrument, Level};
 use tracing_actions::{
     span_constructor::{AlwaysNewSpanConstructor, LazySpanCache},
-    ActionTraceSubscriber,
+    ActionTraceSubscriber, TraceSink,
 };
+
+struct NoSink;
+impl TraceSink for NoSink {
+    fn sink_trace(&self, _trace: &mut tracing_actions::ActionSpan) {}
+}
 
 fn trace(c: &mut Criterion) {
     let mut group = c.benchmark_group("Traces");
 
-    let actions =
-        ActionTraceSubscriber::new(LevelFilter::DEBUG, |_span| (), AlwaysNewSpanConstructor {});
+    let actions = ActionTraceSubscriber::new(LevelFilter::DEBUG, NoSink, AlwaysNewSpanConstructor);
 
     tracing::subscriber::with_default(actions, || {
         group.bench_function("always new span", |bencher| {
@@ -25,8 +29,7 @@ fn trace(c: &mut Criterion) {
         });
     });
 
-    let actions =
-        ActionTraceSubscriber::new(LevelFilter::DEBUG, |_span| (), LazySpanCache::default());
+    let actions = ActionTraceSubscriber::new(LevelFilter::DEBUG, NoSink, LazySpanCache::default());
 
     tracing::subscriber::with_default(actions, || {
         group.bench_function("default span cache", |bencher| {

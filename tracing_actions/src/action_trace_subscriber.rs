@@ -12,9 +12,9 @@ use crate::{
     ActionSpan,
 };
 
-pub trait SinkFunction: Fn(&mut ActionSpan) {}
-
-impl<T> SinkFunction for T where T: Fn(&mut ActionSpan) {}
+pub trait TraceSink {
+    fn sink_trace(&self, trace: &mut ActionSpan);
+}
 
 pub struct ActionTraceSubscriber<Sink, SpanConstructor> {
     id_counter: AtomicU64,
@@ -25,7 +25,7 @@ pub struct ActionTraceSubscriber<Sink, SpanConstructor> {
     span_constructor: SpanConstructor,
 }
 
-impl<Sink: SinkFunction, TSpanConstructor: SpanConstructor>
+impl<Sink: TraceSink, TSpanConstructor: SpanConstructor>
     ActionTraceSubscriber<Sink, TSpanConstructor>
 {
     pub fn new(level: LevelFilter, sink: Sink, span_constructor: TSpanConstructor) -> Self {
@@ -80,7 +80,7 @@ impl<Sink: SinkFunction, TSpanConstructor: SpanConstructor>
     }
 }
 
-impl<Sink: SinkFunction + 'static, TSpanConstructor: SpanConstructor + 'static> Subscriber
+impl<Sink: TraceSink + 'static, TSpanConstructor: SpanConstructor + 'static> Subscriber
     for ActionTraceSubscriber<Sink, TSpanConstructor>
 {
     fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
@@ -139,7 +139,6 @@ impl<Sink: SinkFunction + 'static, TSpanConstructor: SpanConstructor + 'static> 
             .clone();
         active_trace
             .map(|id| self.use_span(&id, |span| span.events.push(ActionEvent::from(event))));
-        log::debug!("received unsupported event: {event:?}");
     }
 
     fn enter(&self, span: &span::Id) {
@@ -177,12 +176,10 @@ impl<Sink: SinkFunction + 'static, TSpanConstructor: SpanConstructor + 'static> 
             .clone();
 
         match current {
-            Some(span) => {
-                match self.use_span(&span, |s| s.metadata).unwrap_or_default() {
-                    Some(metadata) => tracing_core::span::Current::new(span, metadata),
-                    None => tracing_core::span::Current::none(),
-                }
-            }
+            Some(span) => match self.use_span(&span, |s| s.metadata).unwrap_or_default() {
+                Some(metadata) => tracing_core::span::Current::new(span, metadata),
+                None => tracing_core::span::Current::none(),
+            },
             None => tracing_core::span::Current::none(),
         }
     }
@@ -199,7 +196,7 @@ impl<Sink: SinkFunction + 'static, TSpanConstructor: SpanConstructor + 'static> 
         });
         match closed_span {
             Some(mut closed_span) => {
-                (self.span_sink)(&mut closed_span);
+                self.span_sink.sink_trace(&mut closed_span);
                 closed_span.reset();
                 self.span_constructor.return_span(closed_span);
                 true
