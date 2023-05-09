@@ -10,4 +10,4 @@ members = [
 version = "0.1.0"
 
 [workspace.dependencies]
-tracing-actions = { path = "tracing_actions" }
+tracing-actions = { path = "tracing_actions", version = "*" }
