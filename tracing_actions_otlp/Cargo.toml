@@ -1,6 +1,6 @@
 [package]
 name = "tracing-actions-otlp"
-version = "0.1.0"
+version = { workspace = true }
 edition = "2021"
 description = "tracing-actions extension that sends action traces to an opentelemetry server."
 license = "Apache-2.0"
@@ -26,5 +26,4 @@ log = { version = "0" }
 webpki-roots = { version = "0.23" }
 tracing = { version = "0.1" }
 
-tracing-actions = { version = "0.1", path = "../tracing_actions" }
-
+tracing-actions = { workspace = true }

@@ -1,6 +1,6 @@
 [package]
 name = "tracing-actions"
-version = "0.1.0"
+version = { workspace = true }
 edition = "2021"
 description = "Tracing subscriber that vends action trace structures to a callback"
 license = "Apache-2.0"

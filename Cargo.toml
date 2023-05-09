@@ -5,3 +5,9 @@ members = [
     "tracing_actions",
     "tracing_actions_otlp",
 ]
+
+[workspace.package]
+version = "0.1.0"
+
+[workspace.dependencies]
+tracing-actions = { path = "tracing_actions" }
