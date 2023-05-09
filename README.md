@@ -11,10 +11,15 @@ let batch_size = 1024;
 let secure = true;
 let otlp_sink = tracing_actions_otlp::OtlpActionTraceSink::new(
     "https://ingest.lightstep.com:443",
-    tracing_actions_otlp::header_interceptor(vec![("lightstep-access-token", std::env::var("token").unwrap_or_else(|_| "none".to_string()))]),
+    tracing_actions_otlp::header_interceptor(vec![
+        ("lightstep-access-token", std::env::var("token").unwrap_or_else(|_| "none".to_string())
+    )]),
     batch_size,
     secure,
-    tracing_actions_otlp::OtlpAttributes { service_name: "docs-rs example".to_string(), other_attributes: None }
+    tracing_actions_otlp::OtlpAttributes {
+        service_name: "docs-rs example".to_string(),
+        other_attributes: None
+    },
 ).expect("should be able to make otlp sink");
 
 // Next, we configure a subscriber (just like any usage of `tracing-actions`)
