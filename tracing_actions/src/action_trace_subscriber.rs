@@ -107,17 +107,19 @@ impl<Sink: TraceSink + 'static, TSpanConstructor: SpanConstructor + 'static> Sub
         let mut action_span = self.span_constructor.new_span();
         match attributes.parent() {
             Some(parent) => {
-                if self
-                    .use_span(parent, |parent| {
-                        action_span.start_child(attributes, &parent.trace_id, &parent.span_id)
-                    })
-                    .is_none()
-                {
-                    log::debug!("could not find parent span");
+                let parent_result = self.use_span(parent, |parent| {
+                    log::debug!("found parent span - starting new child");
+                    action_span.start_child(attributes, &parent.trace_id, &parent.span_id)
+                });
+                if parent_result.is_none() {
+                    log::debug!("could not find parent span - starting new root");
                     action_span.start_root(attributes);
                 }
             }
-            None => action_span.start_root(attributes),
+            None => {
+                log::debug!("no parent span - starting new root");
+                action_span.start_root(attributes)
+            }
         }
 
         self.insert_new_span(id.clone(), action_span);
@@ -147,6 +149,11 @@ impl<Sink: TraceSink + 'static, TSpanConstructor: SpanConstructor + 'static> Sub
             .get_or_default()
             .lock()
             .expect("threadlocal enter");
+        log::trace!(
+            "entering span. Current: {:?}, entering: {:?}",
+            *active_trace,
+            span
+        );
         *active_trace = Some(span.clone());
     }
 
@@ -156,10 +163,15 @@ impl<Sink: TraceSink + 'static, TSpanConstructor: SpanConstructor + 'static> Sub
             .get_or_default()
             .lock()
             .expect("threadlocal exit");
+        log::trace!(
+            "exiting span. Current: {:?}, exiting: {:?}",
+            *active_trace,
+            span
+        );
         if active_trace.as_ref() == Some(span) {
             *active_trace = None;
         } else {
-            log::warn!(
+            log::trace!(
                 "tried to exit non-active span. Current: {:?}, attempted: {:?}",
                 *active_trace,
                 span
@@ -196,6 +208,8 @@ impl<Sink: TraceSink + 'static, TSpanConstructor: SpanConstructor + 'static> Sub
         });
         match closed_span {
             Some(mut closed_span) => {
+                closed_span.end();
+                log::trace!("Closed action span: {closed_span:?}");
                 self.span_sink.sink_trace(&mut closed_span);
                 closed_span.reset();
                 self.span_constructor.return_span(closed_span);

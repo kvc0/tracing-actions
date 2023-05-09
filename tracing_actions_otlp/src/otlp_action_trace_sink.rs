@@ -10,12 +10,13 @@ use tracing_actions::{ActionEvent, AttributeValue, SpanStatus, TraceKind, TraceS
 const VERSION: Option<&str> = option_env!("CARGO_PKG_VERSION");
 
 use crate::{
-    channel_connection::{default_trust_store, get_channel, ChannelType, insecure_trust_store},
+    channel_connection::{default_trust_store, get_channel, insecure_trust_store, ChannelType},
     proto::opentelemetry::{
         collector::trace::v1::{
             trace_service_client::TraceServiceClient, ExportTraceServiceRequest,
         },
         common::v1::{any_value, AnyValue, InstrumentationScope, KeyValue},
+        resource::v1::Resource,
         trace::v1::{
             span::{self, Event},
             status::StatusCode,
@@ -34,6 +35,36 @@ pub struct OtlpActionTraceSink {
     interceptors: Arc<Option<Box<dyn RequestInterceptor>>>,
     batch: Mutex<Vec<Span>>,
     batch_size: usize,
+    attributes: OtlpAttributes,
+}
+
+#[derive(Debug, Clone)]
+pub struct OtlpAttributes {
+    pub service_name: String,
+    pub other_attributes: Option<Vec<(String, String)>>,
+}
+
+impl From<OtlpAttributes> for Vec<KeyValue> {
+    fn from(value: OtlpAttributes) -> Self {
+        let mut attributes: Vec<KeyValue> = value
+            .other_attributes
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(key, value)| KeyValue {
+                key,
+                value: Some(AnyValue {
+                    value: Some(any_value::Value::StringValue(value)),
+                }),
+            })
+            .collect();
+        attributes.push(KeyValue {
+            key: "service.name".to_string(),
+            value: Some(AnyValue {
+                value: Some(any_value::Value::StringValue(value.service_name)),
+            }),
+        });
+        attributes
+    }
 }
 
 impl OtlpActionTraceSink {
@@ -42,6 +73,7 @@ impl OtlpActionTraceSink {
         interceptors: Option<Box<dyn RequestInterceptor>>,
         batch_size: usize,
         insecure: bool,
+        attributes: OtlpAttributes,
     ) -> Result<Self, Box<dyn Error>> {
         Ok(Self {
             client: get_channel(
@@ -56,6 +88,7 @@ impl OtlpActionTraceSink {
             interceptors: interceptors.into(),
             batch_size,
             batch: Mutex::new(Vec::with_capacity(batch_size)),
+            attributes,
         })
     }
 
@@ -74,7 +107,12 @@ impl OtlpActionTraceSink {
 
         let batch_client = self.client.clone();
         let batch_interceptors = self.interceptors.clone();
-        tokio::spawn(send_batch(batch, batch_client, batch_interceptors));
+        tokio::spawn(send_batch(
+            batch,
+            batch_client,
+            batch_interceptors,
+            self.attributes.clone(),
+        ));
     }
 
     fn add_span_to_batch(&self, span: Span) {
@@ -90,10 +128,14 @@ async fn send_batch(
     batch: Vec<Span>,
     mut client: TraceServiceClient<ChannelType>,
     interceptors: Arc<Option<Box<dyn RequestInterceptor>>>,
+    attributes: OtlpAttributes,
 ) {
     let mut request = tonic::Request::new(ExportTraceServiceRequest {
         resource_spans: vec![ResourceSpans {
-            resource: None,
+            resource: Some(Resource {
+                attributes: attributes.into(),
+                dropped_attributes_count: 0,
+            }),
             scope_spans: vec![ScopeSpans {
                 scope: Some(InstrumentationScope {
                     name: "tracing-actions".to_string(),
