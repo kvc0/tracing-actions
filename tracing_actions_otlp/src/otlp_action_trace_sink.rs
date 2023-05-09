@@ -2,10 +2,9 @@ use std::{
     error::Error,
     mem,
     sync::{Arc, Mutex, MutexGuard},
-    time::SystemTime,
 };
 
-use tracing_actions::{ActionEvent, AttributeValue, SpanStatus, TraceKind, TraceSink};
+use tracing_actions::TraceSink;
 
 const VERSION: Option<&str> = option_env!("CARGO_PKG_VERSION");
 
@@ -15,27 +14,16 @@ use crate::{
         collector::trace::v1::{
             trace_service_client::TraceServiceClient, ExportTraceServiceRequest,
         },
-        common::v1::{any_value, AnyValue, InstrumentationScope, KeyValue},
+        common::v1::InstrumentationScope,
         resource::v1::Resource,
-        trace::v1::{
-            span::{self, Event},
-            status::StatusCode,
-            ResourceSpans, ScopeSpans, Span, Status,
-        },
+        trace::v1::{ResourceSpans, ScopeSpans, Span},
     },
 };
 
+/// Visits each request on its way out; for adding auth headers or what have you.
 pub trait RequestInterceptor: Send + Sync {
     /// Put your request metadata in here if you have need
     fn intercept_request(&self, _request: &mut tonic::Request<ExportTraceServiceRequest>) {}
-}
-
-pub struct OtlpActionTraceSink {
-    client: TraceServiceClient<ChannelType>,
-    interceptors: Arc<Option<Box<dyn RequestInterceptor>>>,
-    batch: Mutex<Vec<Span>>,
-    batch_size: usize,
-    attributes: OtlpAttributes,
 }
 
 #[derive(Debug, Clone)]
@@ -44,26 +32,18 @@ pub struct OtlpAttributes {
     pub other_attributes: Option<Vec<(String, String)>>,
 }
 
-impl From<OtlpAttributes> for Vec<KeyValue> {
-    fn from(value: OtlpAttributes) -> Self {
-        let mut attributes: Vec<KeyValue> = value
-            .other_attributes
-            .unwrap_or_default()
-            .into_iter()
-            .map(|(key, value)| KeyValue {
-                key,
-                value: Some(AnyValue {
-                    value: Some(any_value::Value::StringValue(value)),
-                }),
-            })
-            .collect();
-        attributes.push(KeyValue {
-            key: "service.name".to_string(),
-            value: Some(AnyValue {
-                value: Some(any_value::Value::StringValue(value.service_name)),
-            }),
-        });
-        attributes
+/// A bridge from action-trace to batched opentelemetry trace services.
+pub struct OtlpActionTraceSink {
+    client: TraceServiceClient<ChannelType>,
+    interceptors: Arc<Option<Box<dyn RequestInterceptor>>>,
+    batch: Mutex<Vec<Span>>,
+    batch_size: usize,
+    attributes: OtlpAttributes,
+}
+
+impl TraceSink for OtlpActionTraceSink {
+    fn sink_trace(&self, trace: &mut tracing_actions::ActionSpan) {
+        self.add_span_to_batch(trace.into())
     }
 }
 
@@ -168,110 +148,6 @@ async fn send_batch(
         }
         Err(error) => {
             log::error!("failed to send traces: {error:?}")
-        }
-    }
-}
-
-impl TraceSink for OtlpActionTraceSink {
-    fn sink_trace(&self, trace: &mut tracing_actions::ActionSpan) {
-        self.add_span_to_batch(trace.into())
-    }
-}
-
-impl From<&mut tracing_actions::ActionSpan> for Span {
-    fn from(value: &mut tracing_actions::ActionSpan) -> Self {
-        Self {
-            trace_id: value.trace_id.to_vec(),
-            span_id: value.span_id.to_vec(),
-            trace_state: value.trace_state.clone(),
-            parent_span_id: value
-                .parent_span_id
-                .map(|id| id.to_vec())
-                .unwrap_or_default(),
-            name: value
-                .metadata
-                .map(|m| m.name().to_string())
-                .unwrap_or_else(|| "unknown".to_string()),
-            kind: as_spankind(value.kind) as i32,
-            start_time_unix_nano: value
-                .start
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos() as u64,
-            end_time_unix_nano: value
-                .end
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos() as u64,
-            attributes: value.attributes.drain().map(KeyValue::from).collect(),
-            dropped_attributes_count: 0,
-            events: value.events.drain(..).map(Event::from).collect(),
-            dropped_events_count: 0,
-            links: vec![],
-            dropped_links_count: 0,
-            status: Some(value.status.into()),
-        }
-    }
-}
-
-fn as_spankind(value: TraceKind) -> span::SpanKind {
-    match value {
-        TraceKind::Client => span::SpanKind::Client,
-        TraceKind::Server => span::SpanKind::Server,
-    }
-}
-
-impl From<(&str, AttributeValue)> for KeyValue {
-    fn from(value: (&str, AttributeValue)) -> Self {
-        let (name, value) = value;
-        Self {
-            key: name.to_string(),
-            value: Some(AnyValue {
-                value: Some(match value {
-                    AttributeValue::String(s) => any_value::Value::StringValue(s),
-                    AttributeValue::F64(f) => any_value::Value::DoubleValue(f),
-                    AttributeValue::I64(i) => any_value::Value::IntValue(i),
-                    AttributeValue::U64(u) => any_value::Value::IntValue(u as i64),
-                    AttributeValue::I128(i) => any_value::Value::IntValue(i as i64),
-                    AttributeValue::U128(u) => any_value::Value::IntValue(u as i64),
-                    AttributeValue::Bool(b) => any_value::Value::BoolValue(b),
-                    AttributeValue::Error(e) => any_value::Value::StringValue(e),
-                }),
-            }),
-        }
-    }
-}
-
-impl From<ActionEvent> for Event {
-    fn from(mut value: ActionEvent) -> Self {
-        Self {
-            time_unix_nano: value
-                .timestamp
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos() as u64,
-            name: value.metadata.name().to_string(),
-            attributes: value.attributes.drain().map(KeyValue::from).collect(),
-            dropped_attributes_count: 0,
-        }
-    }
-}
-
-impl From<SpanStatus> for Status {
-    fn from(value: SpanStatus) -> Self {
-        match value {
-            SpanStatus::Unset => Self {
-                message: "traces should set status".to_string(),
-                code: StatusCode::Unset.into(),
-            },
-            SpanStatus::Ok => Self {
-                message: "".to_string(),
-                code: StatusCode::Ok.into(),
-            },
-            SpanStatus::Error => Self {
-                message: "".to_string(),
-                code: StatusCode::Error.into(),
-            },
         }
     }
 }

@@ -27,6 +27,7 @@ pub type ChannelType = hyper::Client<
 /// }
 /// ;
 /// ```
+/// For client_constructor I recommend using `YourGrpcClient::with_origin`
 pub fn get_channel<TrustFunction, ClientConstructor, B, U>(
     endpoint: Uri,
     tls_trust: TrustFunction,
