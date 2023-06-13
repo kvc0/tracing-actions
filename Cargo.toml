@@ -7,7 +7,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.1"
+version = "0.1.2"
 
 [workspace.dependencies]
 tracing-actions = { path = "tracing_actions", version = "0" }
