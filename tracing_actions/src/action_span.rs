@@ -19,13 +19,12 @@ impl Default for TraceKind {
 
 #[derive(Debug, Clone, Copy)]
 pub enum SpanStatus {
-    Unset,
     Ok,
     Error,
 }
 impl Default for SpanStatus {
     fn default() -> Self {
-        Self::Unset
+        Self::Ok
     }
 }
 
@@ -235,6 +234,8 @@ impl Visit for ActionSpan {
         field: &tracing::field::Field,
         value: &(dyn std::error::Error + 'static),
     ) {
+        // This defaults to ok. If you want to make a span error, you just record at least 1 error on the span.
+        self.status = SpanStatus::Error;
         self.attributes
             .insert(field.name(), AttributeValue::Error(format!("{value:?}")));
     }

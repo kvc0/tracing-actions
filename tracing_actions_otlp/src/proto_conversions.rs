@@ -119,10 +119,6 @@ impl From<ActionEvent> for Event {
 impl From<SpanStatus> for Status {
     fn from(value: SpanStatus) -> Self {
         match value {
-            SpanStatus::Unset => Self {
-                message: "traces should set status".to_string(),
-                code: StatusCode::Unset.into(),
-            },
             SpanStatus::Ok => Self {
                 message: "".to_string(),
                 code: StatusCode::Ok.into(),
