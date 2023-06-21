@@ -43,7 +43,7 @@ pub struct OtlpActionTraceSink {
 
 impl TraceSink for OtlpActionTraceSink {
     fn sink_trace(&self, trace: &mut tracing_actions::ActionSpan) {
-        self.add_span_to_batch(trace.into())
+        self.send(trace)
     }
 }
 
@@ -95,11 +95,47 @@ impl OtlpActionTraceSink {
         ));
     }
 
-    fn add_span_to_batch(&self, span: Span) {
+    /// Spans are batched up and sent to your downstream.
+    ///
+    /// See `send_many()` instead if you have a collection of spans to send.
+    /// ```
+    /// # use tracing_actions_otlp::OtlpActionTraceSink;
+    /// # use tracing_actions::ActionSpan;
+    /// # fn f(sink: OtlpActionTraceSink, span: &mut ActionSpan) {
+    /// sink.send(span);
+    /// # }
+    /// ```
+    pub fn send(&self, span: impl Into<Span>) {
+        // You can implement the conversion to Span for your custom type. See `proto_conversions.rs` for an example.
+        let span = span.into();
         let mut spans = self.batch.lock().expect("lock should not be poisoned");
         spans.push(span);
         if self.batch_size <= spans.len() {
             self.send_batch(spans)
+        }
+    }
+
+    /// Spans are batched up and sent to your downstream.
+    ///
+    /// Use this over `send()` when you have already collected spans to avoid needless extra synchronization cost.
+    /// ```
+    /// # use tracing_actions_otlp::OtlpActionTraceSink;
+    /// # use tracing_actions::ActionSpan;
+    /// # fn f(sink: OtlpActionTraceSink, span1: &mut ActionSpan, span2: &mut ActionSpan) {
+    /// let batch = vec![span1, span2];   // Collect a batch somehow
+    /// sink.send_many(batch);            // Send them all at once
+    /// # }
+    /// ```
+    pub fn send_many(&self, batch: impl IntoIterator<Item = impl Into<Span>>) {
+        let mut spans = self.batch.lock().expect("lock should not be poisoned");
+        for span in batch {
+            let span = span.into();
+            spans.push(span);
+            if self.batch_size <= spans.len() {
+                self.send_batch(spans);
+                // release and re-acquire the lock once per batch to allow other threads to make progress
+                spans = self.batch.lock().expect("lock should not be poisoned");
+            }
         }
     }
 }
