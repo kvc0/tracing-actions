@@ -20,7 +20,7 @@ pub struct ActionTraceSubscriber<Sink, SpanConstructor> {
     id_counter: AtomicU64,
     current_traces: Mutex<HashMap<span::Id, ActionSpan>>,
     level: Option<Level>,
-    active_trace: ThreadLocal<Mutex<Option<span::Id>>>,
+    active_span_stack: ThreadLocal<Mutex<Vec<span::Id>>>,
     span_sink: Sink,
     span_constructor: SpanConstructor,
 }
@@ -33,7 +33,7 @@ impl<Sink: TraceSink, TSpanConstructor: SpanConstructor>
             id_counter: Default::default(),
             current_traces: Default::default(),
             level: level.into_level(),
-            active_trace: ThreadLocal::new(),
+            active_span_stack: ThreadLocal::new(),
             span_sink: sink,
             span_constructor,
         }
@@ -158,19 +158,20 @@ impl<Sink: TraceSink + 'static, TSpanConstructor: SpanConstructor + 'static> Sub
     fn record_follows_from(&self, _span: &span::Id, _follows: &span::Id) {}
 
     fn event(&self, event: &tracing::Event<'_>) {
-        let active_trace = self
-            .active_trace
+        let mut active_span = self
+            .active_span_stack
             .get_or_default()
             .lock()
             .expect("threadlocal current")
-            .clone();
-        active_trace
+            .last()
+            .cloned();
+        active_span
             .map(|id| self.use_span(&id, |span| span.events.push(ActionEvent::from(event))));
     }
 
     fn enter(&self, span: &span::Id) {
         let mut active_trace = self
-            .active_trace
+            .active_span_stack
             .get_or_default()
             .lock()
             .expect("threadlocal enter");
@@ -179,26 +180,26 @@ impl<Sink: TraceSink + 'static, TSpanConstructor: SpanConstructor + 'static> Sub
             *active_trace,
             span
         );
-        *active_trace = Some(span.clone());
+        active_trace.push(span.clone());
     }
 
     fn exit(&self, span: &span::Id) {
-        let mut active_trace = self
-            .active_trace
+        let mut active_span_stack = self
+            .active_span_stack
             .get_or_default()
             .lock()
             .expect("threadlocal exit");
         log::trace!(
             "exiting span. Current: {:?}, exiting: {:?}",
-            *active_trace,
+            active_span_stack.last(),
             span
         );
-        if active_trace.as_ref() == Some(span) {
-            *active_trace = None;
+        if active_span_stack.last() == Some(span) {
+            active_span_stack.pop();
         } else {
             log::trace!(
                 "tried to exit non-active span. Current: {:?}, attempted: {:?}",
-                *active_trace,
+                *active_span_stack,
                 span
             );
         }
@@ -206,11 +207,12 @@ impl<Sink: TraceSink + 'static, TSpanConstructor: SpanConstructor + 'static> Sub
 
     fn current_span(&self) -> tracing_core::span::Current {
         let current = self
-            .active_trace
+            .active_span_stack
             .get_or_default()
             .lock()
             .expect("current trace mutex should not be poisoned")
-            .clone();
+            .last()
+            .cloned();
 
         match current {
             Some(span) => match self.use_span(&span, |s| s.metadata).unwrap_or_default() {
@@ -325,6 +327,39 @@ mod test {
 
         let spans: Vec<ActionSpan> = spans.lock().expect("local mutex").clone();
         assert_eq!(2, spans.len());
+
+        let root_span = spans
+            .iter()
+            .find(|s| s.metadata.expect("there is metadata").name() == "a root")
+            .expect("there is a root span");
+
+        let trace = &root_span.trace_id;
+
+        for span in &spans {
+            assert_eq!(trace, &span.trace_id);
+        }
+    }
+
+    #[tokio::test]
+    async fn async_contextual_spans_sync_within_async() {
+        let (_guard, spans) = set_up_tracing();
+
+        async {
+            {
+                let inner_0 = tracing::info_span!("a synchronous subspan");
+                let _inner_0_guard = inner_0.enter();
+            }
+            {
+                let inner_1 = tracing::info_span!("another synchronous subspan");
+                let _inner_1_guard = inner_1.enter();
+            }
+            async {}.instrument(tracing::info_span!("a subspan")).await;
+        }
+        .instrument(tracing::info_span!("a root"))
+        .await;
+
+        let spans: Vec<ActionSpan> = spans.lock().expect("local mutex").clone();
+        assert_eq!(4, spans.len());
 
         let root_span = spans
             .iter()
