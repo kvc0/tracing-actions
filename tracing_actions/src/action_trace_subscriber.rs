@@ -117,8 +117,33 @@ impl<Sink: TraceSink + 'static, TSpanConstructor: SpanConstructor + 'static> Sub
                 }
             }
             None => {
-                log::debug!("no parent span - starting new root");
-                action_span.start_root(attributes)
+                if attributes.is_contextual() {
+                    let current = self.current_span();
+                    match current.id() {
+                        Some(current_id) => {
+                            match self.use_span(current_id, |current| {
+                                action_span.start_child(
+                                    attributes,
+                                    &current.trace_id,
+                                    &current.span_id,
+                                );
+                            }) {
+                                Some(_) => (),
+                                None => {
+                                    log::debug!("could not find indicated current active span - starting new root");
+                                    action_span.start_root(attributes)
+                                }
+                            }
+                        }
+                        None => {
+                            log::debug!("no current span - starting new root");
+                            action_span.start_root(attributes)
+                        }
+                    }
+                } else {
+                    log::debug!("no parent span - starting new root");
+                    action_span.start_root(attributes)
+                }
             }
         }
 
@@ -216,6 +241,100 @@ impl<Sink: TraceSink + 'static, TSpanConstructor: SpanConstructor + 'static> Sub
                 true
             }
             None => false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::sync::{Arc, Mutex};
+
+    use tracing::Instrument;
+    use tracing_core::dispatcher::DefaultGuard;
+
+    use crate::{span_constructor::LazySpanCache, ActionSpan, ActionTraceSubscriber, TraceSink};
+
+    struct TestSink {
+        spans: Arc<Mutex<Vec<ActionSpan>>>,
+    }
+    impl TraceSink for TestSink {
+        fn sink_trace(&self, action_span: &mut ActionSpan) {
+            self.spans
+                .lock()
+                .expect("local lock should work")
+                .push(action_span.clone());
+        }
+    }
+
+    fn set_up_tracing() -> (DefaultGuard, Arc<Mutex<Vec<ActionSpan>>>) {
+        static INITIALIZE_LOGGER_ONCE: std::sync::Once = std::sync::Once::new();
+        INITIALIZE_LOGGER_ONCE.call_once(|| {
+            env_logger::builder().is_test(true).init();
+        });
+        let level = "debug".parse().expect("debug is a level filter");
+        let spans: Arc<Mutex<Vec<ActionSpan>>> = Default::default();
+        let k_logging_subscriber = ActionTraceSubscriber::new(
+            level,
+            TestSink {
+                spans: spans.clone(),
+            },
+            LazySpanCache::default(),
+        );
+        (
+            tracing::subscriber::set_default(k_logging_subscriber),
+            spans,
+        )
+    }
+
+    #[tokio::test]
+    async fn contextual_spans() {
+        let (_guard, spans) = set_up_tracing();
+
+        {
+            let outer = tracing::info_span!("a root");
+            let _guard = outer.enter();
+
+            let inner = tracing::info_span!("a subspan");
+            let _g2 = inner.enter();
+        }
+
+        let spans: Vec<ActionSpan> = spans.lock().expect("local mutex").clone();
+        assert_eq!(2, spans.len());
+
+        let root_span = spans
+            .iter()
+            .find(|s| s.metadata.expect("there is metadata").name() == "a root")
+            .expect("there is a root span");
+
+        let trace = &root_span.trace_id;
+
+        for span in &spans {
+            assert_eq!(trace, &span.trace_id);
+        }
+    }
+
+    #[tokio::test]
+    async fn async_contextual_spans() {
+        let (_guard, spans) = set_up_tracing();
+
+        async {
+            async {}.instrument(tracing::info_span!("a subspan")).await;
+        }
+        .instrument(tracing::info_span!("a root"))
+        .await;
+
+        let spans: Vec<ActionSpan> = spans.lock().expect("local mutex").clone();
+        assert_eq!(2, spans.len());
+
+        let root_span = spans
+            .iter()
+            .find(|s| s.metadata.expect("there is metadata").name() == "a root")
+            .expect("there is a root span");
+
+        let trace = &root_span.trace_id;
+
+        for span in &spans {
+            assert_eq!(trace, &span.trace_id);
         }
     }
 }
