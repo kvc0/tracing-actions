@@ -45,6 +45,7 @@
 //!     level,
 //!     otlp_sink,
 //!     tracing_actions::span_constructor::LazySpanCache::default(),
+//!     tracing_actions::span_constructor::always_record,
 //! );
 //!
 //! // Finally, we install the subscriber.

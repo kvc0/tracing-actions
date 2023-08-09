@@ -18,6 +18,10 @@ impl SpanConstructor for AlwaysNewSpanConstructor {
     }
 }
 
+pub fn always_record(_action_span: &mut ActionSpan) -> bool {
+    true
+}
+
 /// Works with shared spans when it wins a race to grab a mutex.
 /// When it doesn't get a shared span, it simply allocates a new one.
 pub struct LazySpanCache {

@@ -16,19 +16,28 @@ pub trait TraceSink {
     fn sink_trace(&self, trace: &mut ActionSpan);
 }
 
-pub struct ActionTraceSubscriber<Sink, SpanConstructor> {
+pub struct ActionTraceSubscriber<Sink, SpanConstructor, FnShouldRecord> {
     id_counter: AtomicU64,
     current_traces: Mutex<HashMap<span::Id, ActionSpan>>,
     level: Option<Level>,
     active_span_stack: ThreadLocal<Mutex<Vec<span::Id>>>,
     span_sink: Sink,
     span_constructor: SpanConstructor,
+    should_record_span: FnShouldRecord,
 }
 
-impl<Sink: TraceSink, TSpanConstructor: SpanConstructor>
-    ActionTraceSubscriber<Sink, TSpanConstructor>
+impl<
+        Sink: TraceSink,
+        TSpanConstructor: SpanConstructor,
+        FnShouldRecord: Fn(&mut ActionSpan) -> bool,
+    > ActionTraceSubscriber<Sink, TSpanConstructor, FnShouldRecord>
 {
-    pub fn new(level: LevelFilter, sink: Sink, span_constructor: TSpanConstructor) -> Self {
+    pub fn new(
+        level: LevelFilter,
+        sink: Sink,
+        span_constructor: TSpanConstructor,
+        should_record_span: FnShouldRecord,
+    ) -> Self {
         Self {
             id_counter: Default::default(),
             current_traces: Default::default(),
@@ -36,6 +45,7 @@ impl<Sink: TraceSink, TSpanConstructor: SpanConstructor>
             active_span_stack: ThreadLocal::new(),
             span_sink: sink,
             span_constructor,
+            should_record_span,
         }
     }
 
@@ -80,8 +90,11 @@ impl<Sink: TraceSink, TSpanConstructor: SpanConstructor>
     }
 }
 
-impl<Sink: TraceSink + 'static, TSpanConstructor: SpanConstructor + 'static> Subscriber
-    for ActionTraceSubscriber<Sink, TSpanConstructor>
+impl<
+        Sink: TraceSink + 'static,
+        TSpanConstructor: SpanConstructor + 'static,
+        FnShouldRecord: Fn(&mut ActionSpan) -> bool + 'static,
+    > Subscriber for ActionTraceSubscriber<Sink, TSpanConstructor, FnShouldRecord>
 {
     fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
         match &self.level {
@@ -158,15 +171,14 @@ impl<Sink: TraceSink + 'static, TSpanConstructor: SpanConstructor + 'static> Sub
     fn record_follows_from(&self, _span: &span::Id, _follows: &span::Id) {}
 
     fn event(&self, event: &tracing::Event<'_>) {
-        let mut active_span = self
+        let active_span = self
             .active_span_stack
             .get_or_default()
             .lock()
             .expect("threadlocal current")
             .last()
             .cloned();
-        active_span
-            .map(|id| self.use_span(&id, |span| span.events.push(ActionEvent::from(event))));
+        active_span.map(|id| self.use_span(&id, |span| span.events.push(ActionEvent::from(event))));
     }
 
     fn enter(&self, span: &span::Id) {
@@ -237,7 +249,10 @@ impl<Sink: TraceSink + 'static, TSpanConstructor: SpanConstructor + 'static> Sub
             Some(mut closed_span) => {
                 closed_span.end();
                 log::trace!("Closed action span: {closed_span:?}");
-                self.span_sink.sink_trace(&mut closed_span);
+                if (self.should_record_span)(&mut closed_span) {
+                    log::trace!("Action span can be recorded: {closed_span:?}");
+                    self.span_sink.sink_trace(&mut closed_span);
+                }
                 closed_span.reset();
                 self.span_constructor.return_span(closed_span);
                 true
@@ -281,6 +296,28 @@ mod test {
                 spans: spans.clone(),
             },
             LazySpanCache::default(),
+            move |_| true,
+        );
+        (
+            tracing::subscriber::set_default(k_logging_subscriber),
+            spans,
+        )
+    }
+
+    fn set_up_tracing_should_record<
+        FnShouldRecord: Fn(&mut ActionSpan) -> bool + 'static + Send + Sync,
+    >(
+        should_record: FnShouldRecord,
+    ) -> (DefaultGuard, Arc<Mutex<Vec<ActionSpan>>>) {
+        let level = "debug".parse().expect("debug is a level filter");
+        let spans: Arc<Mutex<Vec<ActionSpan>>> = Default::default();
+        let k_logging_subscriber = ActionTraceSubscriber::new(
+            level,
+            TestSink {
+                spans: spans.clone(),
+            },
+            LazySpanCache::default(),
+            should_record,
         );
         (
             tracing::subscriber::set_default(k_logging_subscriber),
@@ -360,6 +397,66 @@ mod test {
 
         let spans: Vec<ActionSpan> = spans.lock().expect("local mutex").clone();
         assert_eq!(4, spans.len());
+
+        let root_span = spans
+            .iter()
+            .find(|s| s.metadata.expect("there is metadata").name() == "a root")
+            .expect("there is a root span");
+
+        let trace = &root_span.trace_id;
+
+        for span in &spans {
+            assert_eq!(trace, &span.trace_id);
+        }
+    }
+
+    #[tokio::test]
+    async fn no_spans_recorded() {
+        let (_guard, spans) = set_up_tracing_should_record(move |_| false);
+
+        {
+            let outer = tracing::info_span!("a root");
+            let _guard = outer.enter();
+
+            let inner = tracing::info_span!("a subspan");
+            let _g2 = inner.enter();
+        }
+
+        let spans: Vec<ActionSpan> = spans.lock().expect("local mutex").clone();
+        assert_eq!(0, spans.len());
+    }
+
+    #[tokio::test]
+    async fn only_spans_with_attribute_recorded() {
+        let (_guard, spans) = set_up_tracing_should_record(move |action_span| {
+            action_span.attributes.contains_key("foobar")
+        });
+
+        // Should not be recorded
+        {
+            let outer = tracing::info_span!("a root");
+            let _guard = outer.enter();
+
+            let inner = tracing::info_span!("a subspan");
+            let _g2 = inner.enter();
+        }
+
+        {
+            // Should be recorded
+            let outer = tracing::info_span!("a root", foobar = "42");
+            let _guard = outer.enter();
+
+            // Should not be recorded
+            let inner = tracing::info_span!("a subspan");
+            let _g2 = inner.enter();
+
+            // Should be recorded
+            let inner_inner = tracing::info_span!("a subspan", foobar = "24");
+            let _g3 = inner_inner.enter();
+        }
+
+        let spans: Vec<ActionSpan> = spans.lock().expect("local mutex").clone();
+        assert_eq!(2, spans.len());
 
         let root_span = spans
             .iter()

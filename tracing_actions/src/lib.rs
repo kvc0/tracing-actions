@@ -34,6 +34,7 @@
 //!     level,
 //!     KLog { k: 42, n: Default::default() },
 //!     tracing_actions::span_constructor::LazySpanCache::default(),
+//!     tracing_actions::span_constructor::always_record,
 //! );
 //!
 //! // Finally, we install the subscriber.
